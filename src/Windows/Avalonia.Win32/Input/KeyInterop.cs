@@ -11,8 +11,8 @@ namespace Avalonia.Win32.Input
     /// </summary>
     public static class KeyInterop
     {
-        // source: https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
-        private static readonly Dictionary<Key, int> s_virtualKeyFromKey = new(169)
+        // Source: https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
+        private static readonly IReadOnlyDictionary<Key, int> s_virtualKeyFromKey = new Dictionary<Key, int>(169)
         {
             { Key.Cancel, (int)VK_CANCEL },
             { Key.Back, (int)VK_BACK },
@@ -185,13 +185,13 @@ namespace Avalonia.Win32.Input
             { Key.OemClear, (int)VK_OEM_CLEAR }
         };
 
-        private static readonly Dictionary<int, Key> s_keyFromVirtualKey =
+        private static readonly IReadOnlyDictionary<int, Key> s_keyFromVirtualKey =
             s_virtualKeyFromKey.ToDictionary(pair => pair.Value, pair => pair.Key);
 
         // https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#scan-codes
         // https://github.com/chromium/chromium/blob/main/ui/events/keycodes/dom/dom_code_data.inc
         // This list has the same order as the PhysicalKey enum.
-        private static readonly Dictionary<ushort, PhysicalKey> s_physicalKeyFromExtendedScanCode = new(155)
+        private static readonly IReadOnlyDictionary<ushort, PhysicalKey> s_physicalKeyFromExtendedScanCode = new Dictionary<ushort, PhysicalKey>(155)
         {
             // Writing System Keys
             { 0x0029, PhysicalKey.Backquote },
@@ -266,7 +266,7 @@ namespace Avalonia.Win32.Input
             { 0x0071, PhysicalKey.Lang2 },
             { 0x0078, PhysicalKey.Lang3 },
             { 0x0077, PhysicalKey.Lang4 },
-            //{     , PhysicalKey.Lang5 }, Not mapped on Windows since it's the same as F24 (see Chromium remarks)
+            //{      , PhysicalKey.Lang5 }, // Not mapped on Windows since it's the same as F24 (see Chromium remarks)
             { 0x007B, PhysicalKey.NonConvert },
 
             // Control Pad Section
@@ -297,15 +297,15 @@ namespace Avalonia.Win32.Input
             { 0x0048, PhysicalKey.NumPad8 },
             { 0x0049, PhysicalKey.NumPad9 },
             { 0x004E, PhysicalKey.NumPadAdd },
-            //{     , PhysicalKey.NumPadClear },
+            //{      , PhysicalKey.NumPadClear },
             { 0x007E, PhysicalKey.NumPadComma },
             { 0x0053, PhysicalKey.NumPadDecimal },
             { 0xE035, PhysicalKey.NumPadDivide },
             { 0xE01C, PhysicalKey.NumPadEnter },
             { 0x0059, PhysicalKey.NumPadEqual },
             { 0x0037, PhysicalKey.NumPadMultiply },
-            //{     , PhysicalKey.NumPadParenLeft },
-            //{     , PhysicalKey.NumPadParenRight },
+            //{      , PhysicalKey.NumPadParenLeft },
+            //{      , PhysicalKey.NumPadParenRight },
             { 0x004A, PhysicalKey.NumPadSubtract },
 
             // Function Section
@@ -365,13 +365,14 @@ namespace Avalonia.Win32.Input
             // Legacy Keys
             { 0xE018, PhysicalKey.Copy },
             { 0xE017, PhysicalKey.Cut },
-            //{     , PhysicalKey.Find },
-            //{     , PhysicalKey.Open },
+            //{      , PhysicalKey.Find },
+            //{      , PhysicalKey.Open },
             { 0xE00A, PhysicalKey.Paste },
-            //{     , PhysicalKey.Props },
-            //{     , PhysicalKey.Select },
+            //{      , PhysicalKey.Props },
+            //{      , PhysicalKey.Select },
             { 0xE008, PhysicalKey.Undo },
         };
+
 
         /// <summary>
         /// Indicates whether the key is an extended key, such as the right-hand ALT and CTRL keys.
@@ -380,60 +381,52 @@ namespace Avalonia.Win32.Input
         private static bool IsExtended(int keyData)
         {
             const int extendedMask = 1 << 24;
-
             return (keyData & extendedMask) != 0;
         }
 
+        /// <summary>
+        /// Extracts the scan code from the key data.
+        /// </summary>
+        /// <param name="keyData">The key data (in the same format as lParam for WM_KEYDOWN).</param>
+        /// <returns>The scan code.</returns>
         private static byte GetScanCode(int keyData)
         {
             // Bits from 16 to 23 represent scan code.
             const int scanCodeMask = 0xFF0000;
-
             return (byte)((keyData & scanCodeMask) >> 16);
         }
 
+        /// <summary>
+        /// Adjusts the virtual key for special keys like Shift, Alt, and Control to differentiate left/right.
+        /// </summary>
+        /// <param name="virtualKey">The Windows virtual-key.</param>
+        /// <param name="keyData">The key data (in the same format as lParam for WM_KEYDOWN).</param>
+        /// <returns>The adjusted virtual key.</returns>
         private static int GetVirtualKey(int virtualKey, int keyData)
         {
             // Adapted from https://github.com/dotnet/wpf/blob/master/src/Microsoft.DotNet.Wpf/src/PresentationCore/System/Windows/InterOp/HwndKeyboardInputProvider.cs.
 
-            if (virtualKey == (int)VK_SHIFT)
+            switch (virtualKey)
             {
-                var scanCode = GetScanCode(keyData);
+                case (int)VK_SHIFT:
+                    var scanCode = GetScanCode(keyData);
+                    // MAPVK_VSC_TO_VK_EX is used to distinguish left/right shift keys
+                    virtualKey = (int)MapVirtualKey(scanCode, (uint)MapVirtualKeyMapTypes.MAPVK_VSC_TO_VK_EX);
 
-                virtualKey = (int)MapVirtualKey(scanCode, (uint)MapVirtualKeyMapTypes.MAPVK_VSC_TO_VK_EX);
+                    // Fallback to Left Shift if MapVirtualKey returns 0, as it's the most common default.
+                    if (virtualKey == 0)
+                    {
+                        virtualKey = (int)VK_LSHIFT;
+                    }
+                    break;
 
-                if (virtualKey == 0)
-                {
-                    virtualKey = (int)VK_LSHIFT;
-                }
-            }
+                case (int)VK_MENU: // Alt key
+                    virtualKey = IsExtended(keyData) ? (int)VK_RMENU : (int)VK_LMENU;
+                    break;
 
-            else if (virtualKey == (int)VK_MENU)
-            {
-                bool isRight = IsExtended(keyData);
-
-                if (isRight)
-                {
-                    virtualKey = (int)VK_RMENU;
-                }
-                else
-                {
-                    virtualKey = (int)VK_LMENU;
-                }
-            }
-            
-            else if (virtualKey == (int)VK_CONTROL)
-            {
-                bool isRight = IsExtended(keyData);
-
-                if (isRight)
-                {
-                    virtualKey = (int)VK_RCONTROL;
-                }
-                else
-                {
-                    virtualKey = (int)VK_LCONTROL;
-                }
+                case (int)VK_CONTROL: // Control key
+                    virtualKey = IsExtended(keyData) ? (int)VK_RCONTROL : (int)VK_LCONTROL;
+                    break;
             }
 
             return virtualKey;
@@ -462,7 +455,6 @@ namespace Avalonia.Win32.Input
         public static int VirtualKeyFromKey(Key key)
         {
             s_virtualKeyFromKey.TryGetValue(key, out var result);
-
             return result;
         }
 
@@ -475,22 +467,28 @@ namespace Avalonia.Win32.Input
         public static PhysicalKey PhysicalKeyFromVirtualKey(int virtualKey, int keyData)
         {
             uint scanCode = GetScanCode(keyData);
+
+            // If the scan code from keyData is 0, try to obtain it from the virtual key.
+            // This can happen for certain system keys or synthetic events.
             if (scanCode == 0U)
             {
-                // in some cases, the scan code contained in the keyData might be zero:
-                // try to get one from the virtual key instead
                 scanCode = MapVirtualKey((uint)virtualKey, (uint)MapVirtualKeyMapTypes.MAPVK_VK_TO_VSC);
                 if (scanCode == 0U)
                     return PhysicalKey.None;
             }
 
+            // Mark as extended if the extended bit is set in keyData
             if (IsExtended(keyData))
                 scanCode |= 0xE000;
 
-            return scanCode is > 0 and <= 0xE0FF
-                && s_physicalKeyFromExtendedScanCode.TryGetValue((ushort)scanCode, out var result) ?
-                    result :
-                    PhysicalKey.None;
+            // Check if the scan code falls within the expected range for physical keys
+            // and then try to retrieve the corresponding PhysicalKey.
+            if (scanCode > 0 && scanCode <= 0xE0FF && s_physicalKeyFromExtendedScanCode.TryGetValue((ushort)scanCode, out var result))
+            {
+                return result;
+            }
+
+            return PhysicalKey.None;
         }
 
         /// <summary>
@@ -502,7 +500,7 @@ namespace Avalonia.Win32.Input
         public static unsafe string? GetKeySymbol(int virtualKey, int keyData)
         {
             const int bufferSize = 4;
-            const uint doNotChangeKeyboardState = 1U << 2;
+            const uint doNotChangeKeyboardState = 1U << 2; // KBDGRF_NODEFBASE in newer Windows SDKs
 
             fixed (byte* keyStates = stackalloc byte[256])
             fixed (char* buffer = stackalloc char[bufferSize])
@@ -522,7 +520,9 @@ namespace Avalonia.Win32.Input
                 {
                     < 0 => new string(buffer, 0, -length), // dead key
                     0 => null,
-                    1 when !KeySymbolHelper.IsAllowedAsciiKeySymbol(buffer[0]) => null,
+                    // Filter out control characters that might be returned for non-symbol keys
+                    // Note: KeySymbolHelper would need to be defined elsewhere in your project if it's not a standard .NET class.
+                    1 when !KeySymbolHelper.IsAllowedAsciiKeySymbol(buffer[0]) => null, 
                     2 when buffer[0] == buffer[1] => new string(buffer, 0, 1), // dead key second press repeats symbol
                     _ => new string(buffer, 0, length)
                 };
